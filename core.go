@@ -25,7 +25,8 @@ type Raft struct {
 }
 
 type candidateState struct {
-	votedNodes map[NodeID]struct{}
+	votedNodes    map[NodeID]struct{}
+	notVotedNodes map[NodeID]struct{}
 }
 
 func NewRaft(storage Storage, timer Timer, client Client) *Raft {
@@ -65,6 +66,7 @@ func (r *Raft) handleTimeout() {
 		votedNodes: map[NodeID]struct{}{
 			r.storageState.NodeID: {},
 		},
+		notVotedNodes: map[NodeID]struct{}{},
 	}
 
 	// do request votes
@@ -99,13 +101,45 @@ func (r *Raft) checkResponseTerm(term TermNumber, votedFor NullNodeID) {
 	}
 }
 
+func (r *Raft) candidateCheckedAllNodes() bool {
+	nodeChecked := func(nodeID NodeID) bool {
+		_, ok := r.candidate.votedNodes[nodeID]
+		if ok {
+			return true
+		}
+		_, ok = r.candidate.notVotedNodes[nodeID]
+		if ok {
+			return true
+		}
+		return false
+	}
+
+	for _, nodeID := range r.storageState.ClusterNodes {
+		if !nodeChecked(nodeID) {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Raft) candidateSwitchBackToFollowerIfPossible() {
+	if !r.candidateCheckedAllNodes() {
+		return
+	}
+	r.state = raftStateFollower
+	r.candidate = nil
+}
+
 func (r *Raft) handleVoteResponse(nodeID NodeID, output RequestVoteOutput, err error) {
 	r.checkResponseTerm(output.Term, NullNodeID{})
+
 	if r.state != raftStateCandidate {
 		return
 	}
 
 	if !output.VoteGranted {
+		r.candidate.notVotedNodes[nodeID] = struct{}{}
+		r.candidateSwitchBackToFollowerIfPossible()
 		return
 	}
 
@@ -148,13 +182,15 @@ func (r *Raft) RequestVote(input RequestVoteInput) RequestVoteOutput {
 	})
 
 	granted := false
-	votedFor := r.storageState.VotedFor
-	if votedFor.Valid && votedFor.NodeID == input.CandidateID {
-		granted = true
+	if input.Term >= r.storageState.CurrentTerm {
+		votedFor := r.storageState.VotedFor
+		if votedFor.Valid && votedFor.NodeID == input.CandidateID {
+			granted = true
+		}
 	}
 
 	return RequestVoteOutput{
-		Term:        input.Term,
+		Term:        r.storageState.CurrentTerm,
 		VoteGranted: granted,
 	}
 }

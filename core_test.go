@@ -197,6 +197,29 @@ func TestRaft_Start(t *testing.T) {
 
 		assert.Equal(t, raftStateLeader, r.raft.state)
 	})
+
+	t.Run("all votes not granted, become follower", func(t *testing.T) {
+		r := newRaftTestWith3Nodes()
+		r.raft.Start()
+
+		assert.Equal(t, 1, len(r.timer.AddCallbacks))
+		r.timer.AddCallbacks[0]()
+		assert.Equal(t, raftStateCandidate, r.raft.state)
+
+		handlers := r.client.RequestVoteHandlers
+		assert.Equal(t, 2, len(handlers))
+
+		handlers[0](RequestVoteOutput{
+			Term:        initTerm + 1,
+			VoteGranted: false,
+		}, nil)
+		handlers[1](RequestVoteOutput{
+			Term:        initTerm + 1,
+			VoteGranted: false,
+		}, nil)
+
+		assert.Equal(t, raftStateFollower, r.raft.state)
+	})
 }
 
 func TestRaft_RequestVote(t *testing.T) {
@@ -258,5 +281,37 @@ func TestRaft_RequestVote(t *testing.T) {
 
 		states := r.storage.PutStateInputs
 		assert.Equal(t, 1, len(states))
+
+		// with lower term
+		output = r.raft.RequestVote(RequestVoteInput{
+			Term:         initTerm,
+			CandidateID:  node2,
+			LastLogIndex: 0,
+			LastLogTerm:  0,
+		})
+		assert.Equal(t, initTerm+1, output.Term)
+		assert.Equal(t, false, output.VoteGranted)
+	})
+
+	t.Run("rejected after already became candidate", func(t *testing.T) {
+		r := newRaftTestWith3Nodes()
+		r.raft.Start()
+
+		assert.Equal(t, raftStateFollower, r.raft.state)
+		r.timer.AddCallbacks[0]()
+		assert.Equal(t, raftStateCandidate, r.raft.state)
+
+		r.storage.PutStateInputs = nil
+
+		output := r.raft.RequestVote(RequestVoteInput{
+			Term:         initTerm + 1,
+			CandidateID:  node2,
+			LastLogIndex: 0,
+			LastLogTerm:  0,
+		})
+		assert.Equal(t, initTerm+1, output.Term)
+		assert.Equal(t, false, output.VoteGranted)
+
+		assert.Equal(t, 0, len(r.storage.PutStateInputs))
 	})
 }
