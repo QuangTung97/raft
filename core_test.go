@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -33,6 +34,8 @@ func newRaftTest() *raftTest {
 var node1 = NodeID{100, 1}
 var node2 = NodeID{100, 2}
 var node3 = NodeID{100, 3}
+var node4 = NodeID{100, 4}
+var node5 = NodeID{100, 5}
 
 const initTerm = TermNumber(70)
 
@@ -220,6 +223,97 @@ func TestRaft_Start(t *testing.T) {
 
 		assert.Equal(t, raftStateFollower, r.raft.state)
 	})
+
+	t.Run("request vote error, do retry", func(t *testing.T) {
+		r := newRaftTestWith3Nodes()
+		r.raft.Start()
+
+		assert.Equal(t, 1, len(r.timer.AddCallbacks))
+		r.timer.AddCallbacks[0]()
+		assert.Equal(t, raftStateCandidate, r.raft.state)
+
+		handlers := r.client.RequestVoteHandlers
+		assert.Equal(t, 2, len(handlers))
+
+		r.client.RequestVoteInputs = nil
+
+		handlers[0](RequestVoteOutput{}, errors.New("some error"))
+
+		inputs := r.client.RequestVoteInputs
+		assert.Equal(t, 1, len(inputs))
+		assert.Equal(t, node2, inputs[0].NodeID)
+		assert.Equal(t, initTerm+1, inputs[0].Term)
+		assert.Equal(t, node1, inputs[0].CandidateID)
+	})
+
+	t.Run("one vote not granted, one error, switch to follower state", func(t *testing.T) {
+		r := newRaftTestWith3Nodes()
+		r.raft.Start()
+
+		assert.Equal(t, 1, len(r.timer.AddCallbacks))
+		r.timer.AddCallbacks[0]()
+		assert.Equal(t, raftStateCandidate, r.raft.state)
+
+		handlers := r.client.RequestVoteHandlers
+		assert.Equal(t, 2, len(handlers))
+
+		handlers[0](RequestVoteOutput{
+			Term:        initTerm + 1,
+			VoteGranted: false,
+		}, nil)
+		handlers[1](RequestVoteOutput{}, errors.New("some error 2"))
+
+		assert.Equal(t, raftStateFollower, r.raft.state)
+	})
+
+	t.Run("all request votes error, still in the candidate state", func(t *testing.T) {
+		r := newRaftTestWith3Nodes()
+		r.raft.Start()
+
+		assert.Equal(t, 1, len(r.timer.AddCallbacks))
+		r.timer.AddCallbacks[0]()
+		assert.Equal(t, raftStateCandidate, r.raft.state)
+
+		handlers := r.client.RequestVoteHandlers
+		assert.Equal(t, 2, len(handlers))
+
+		r.client.RequestVoteInputs = nil
+
+		handlers[0](RequestVoteOutput{}, errors.New("some error 1"))
+		handlers[1](RequestVoteOutput{}, errors.New("some error 2"))
+
+		inputs := r.client.RequestVoteInputs
+		assert.Equal(t, 2, len(inputs))
+
+		assert.Equal(t, raftStateCandidate, r.raft.state)
+	})
+
+	t.Run("one vote not granted, one error, not request vote again", func(t *testing.T) {
+		r := newRaftTestWith3Nodes()
+		r.raft.Start()
+
+		assert.Equal(t, 1, len(r.timer.AddCallbacks))
+		r.timer.AddCallbacks[0]()
+		assert.Equal(t, raftStateCandidate, r.raft.state)
+
+		handlers := r.client.RequestVoteHandlers
+		assert.Equal(t, 2, len(handlers))
+
+		r.client.RequestVoteInputs = nil
+		r.timer.AddDurations = nil
+
+		handlers[0](RequestVoteOutput{
+			Term:        initTerm + 1,
+			VoteGranted: false,
+		}, nil)
+		handlers[1](RequestVoteOutput{}, errors.New("some error 2"))
+
+		inputs := r.client.RequestVoteInputs
+		assert.Equal(t, 0, len(inputs))
+
+		assert.Equal(t, raftStateFollower, r.raft.state)
+		assert.Equal(t, []time.Duration{10 * time.Second}, r.timer.AddDurations)
+	})
 }
 
 func TestRaft_RequestVote(t *testing.T) {
@@ -313,5 +407,50 @@ func TestRaft_RequestVote(t *testing.T) {
 		assert.Equal(t, false, output.VoteGranted)
 
 		assert.Equal(t, 0, len(r.storage.PutStateInputs))
+	})
+}
+
+func newRaftTestWith5Nodes() *raftTest {
+	r := newRaftTest()
+	r.storage.GetStateFunc = func() (NullStorageState, error) {
+		return NullStorageState{
+			Valid: true,
+			State: StorageState{
+				NodeID:      node1,
+				CurrentTerm: initTerm,
+				VotedFor:    NullNodeID{},
+
+				ClusterNodes: []NodeID{node1, node2, node3, node4, node5},
+				ClusterIndex: 0,
+			},
+		}, nil
+	}
+	return r
+}
+
+func TestRaft_Start_With_5_Nodes(t *testing.T) {
+	t.Run("first vote not granted, still in candidate state", func(t *testing.T) {
+		r := newRaftTestWith5Nodes()
+		r.raft.Start()
+
+		assert.Equal(t, 1, len(r.timer.AddCallbacks))
+		r.timer.AddCallbacks[0]()
+
+		handlers := r.client.RequestVoteHandlers
+		assert.Equal(t, 4, len(handlers))
+
+		handlers[0](RequestVoteOutput{
+			Term:        initTerm + 1,
+			VoteGranted: true,
+		}, nil)
+
+		assert.Equal(t, raftStateCandidate, r.raft.state)
+
+		handlers[1](RequestVoteOutput{
+			Term:        initTerm + 1,
+			VoteGranted: true,
+		}, nil)
+
+		assert.Equal(t, raftStateLeader, r.raft.state)
 	})
 }

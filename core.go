@@ -26,7 +26,8 @@ type Raft struct {
 
 type candidateState struct {
 	votedNodes    map[NodeID]struct{}
-	notVotedNodes map[NodeID]struct{}
+	rejectedNodes map[NodeID]struct{}
+	errorNodes    map[NodeID]struct{}
 }
 
 func NewRaft(storage Storage, timer Timer, client Client) *Raft {
@@ -42,8 +43,12 @@ func NewRaft(storage Storage, timer Timer, client Client) *Raft {
 }
 
 func (r *Raft) isVotedNodesMajority() bool {
+	return r.isMajority(r.candidate.votedNodes)
+}
+
+func (r *Raft) isMajority(nodeSet map[NodeID]struct{}) bool {
 	major := len(r.storageState.ClusterNodes)/2 + 1
-	if len(r.candidate.votedNodes) >= major {
+	if len(nodeSet) >= major {
 		return true
 	}
 	return false
@@ -66,7 +71,8 @@ func (r *Raft) handleTimeout() {
 		votedNodes: map[NodeID]struct{}{
 			r.storageState.NodeID: {},
 		},
-		notVotedNodes: map[NodeID]struct{}{},
+		rejectedNodes: map[NodeID]struct{}{},
+		errorNodes:    map[NodeID]struct{}{},
 	}
 
 	// do request votes
@@ -75,15 +81,18 @@ func (r *Raft) handleTimeout() {
 		if nodeID == r.storageState.NodeID {
 			continue
 		}
-
-		r.client.RequestVote(RequestVoteInput{
-			NodeID:      nodeID,
-			Term:        r.storageState.CurrentTerm,
-			CandidateID: r.storageState.NodeID,
-		}, func(output RequestVoteOutput, err error) {
-			r.handleVoteResponse(nodeID, output, err)
-		})
+		r.callRequestVote(nodeID)
 	}
+}
+
+func (r *Raft) callRequestVote(nodeID NodeID) {
+	r.client.RequestVote(RequestVoteInput{
+		NodeID:      nodeID,
+		Term:        r.storageState.CurrentTerm,
+		CandidateID: r.storageState.NodeID,
+	}, func(output RequestVoteOutput, err error) {
+		r.handleVoteResponse(nodeID, output, err)
+	})
 }
 
 func (r *Raft) checkResponseTerm(term TermNumber, votedFor NullNodeID) {
@@ -107,7 +116,11 @@ func (r *Raft) candidateCheckedAllNodes() bool {
 		if ok {
 			return true
 		}
-		_, ok = r.candidate.notVotedNodes[nodeID]
+		_, ok = r.candidate.rejectedNodes[nodeID]
+		if ok {
+			return true
+		}
+		_, ok = r.candidate.errorNodes[nodeID]
 		if ok {
 			return true
 		}
@@ -122,15 +135,47 @@ func (r *Raft) candidateCheckedAllNodes() bool {
 	return true
 }
 
+func cloneNodeSet(nodes map[NodeID]struct{}) map[NodeID]struct{} {
+	result := map[NodeID]struct{}{}
+	for n := range nodes {
+		result[n] = struct{}{}
+	}
+	return result
+}
+
 func (r *Raft) candidateSwitchBackToFollowerIfPossible() {
 	if !r.candidateCheckedAllNodes() {
 		return
 	}
+
+	nodes := cloneNodeSet(r.candidate.votedNodes)
+	for n := range r.candidate.rejectedNodes {
+		nodes[n] = struct{}{}
+	}
+
+	if !r.isMajority(nodes) {
+		return
+	}
+
 	r.state = raftStateFollower
 	r.candidate = nil
+	r.startFollowerTimer()
 }
 
 func (r *Raft) handleVoteResponse(nodeID NodeID, output RequestVoteOutput, err error) {
+	if err != nil {
+		if r.state == raftStateCandidate {
+			r.candidate.errorNodes[nodeID] = struct{}{}
+			r.candidateSwitchBackToFollowerIfPossible()
+
+			// still in candidate state
+			if r.state == raftStateCandidate {
+				r.callRequestVote(nodeID)
+			}
+		}
+		return
+	}
+
 	r.checkResponseTerm(output.Term, NullNodeID{})
 
 	if r.state != raftStateCandidate {
@@ -138,7 +183,7 @@ func (r *Raft) handleVoteResponse(nodeID NodeID, output RequestVoteOutput, err e
 	}
 
 	if !output.VoteGranted {
-		r.candidate.notVotedNodes[nodeID] = struct{}{}
+		r.candidate.rejectedNodes[nodeID] = struct{}{}
 		r.candidateSwitchBackToFollowerIfPossible()
 		return
 	}
@@ -165,6 +210,10 @@ func (r *Raft) handleVoteResponse(nodeID NodeID, output RequestVoteOutput, err e
 	}
 }
 
+func (r *Raft) startFollowerTimer() {
+	r.timer.AddTimer(10*time.Second, r.handleTimeout)
+}
+
 func (r *Raft) Start() {
 	nullState, err := r.storage.GetState()
 	if err != nil {
@@ -172,7 +221,8 @@ func (r *Raft) Start() {
 	}
 
 	r.storageState = nullState.State
-	r.timer.AddTimer(10*time.Second, r.handleTimeout)
+
+	r.startFollowerTimer()
 }
 
 func (r *Raft) RequestVote(input RequestVoteInput) RequestVoteOutput {
