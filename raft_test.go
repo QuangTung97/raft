@@ -22,6 +22,8 @@ func newRaftTest() *raftTest {
 		client:  &ClientMock{},
 	}
 
+	r.timer.CancelFunc = func() bool { return false }
+
 	r.raft = NewRaft(r.storage, r.timer, r.client)
 	return r
 }
@@ -317,6 +319,30 @@ func TestRaft_Start(t *testing.T) {
 
 		assert.Equal(t, raftStateFollower, r.raft.state)
 		assert.Equal(t, []time.Duration{10 * time.Second}, r.timer.AddDurations)
+	})
+
+	t.Run("do not become candidate for old timer expire", func(t *testing.T) {
+		r := newRaftTestWith3Nodes()
+		r.raft.Start()
+
+		r.raft.AppendEntriesRPC(AppendEntriesInput{
+			Term:     initTerm + 1,
+			LeaderID: node2,
+
+			PrevLogIndex: 0,
+			PrevLogTerm:  0,
+
+			Entries: nil,
+		})
+
+		callbacks := r.timer.AddCallbacks
+		assert.Equal(t, 2, len(callbacks))
+
+		assert.Equal(t, []int{1}, r.timer.CancelIDs)
+
+		callbacks[0]()
+
+		assert.Equal(t, raftStateFollower, r.raft.state)
 	})
 }
 

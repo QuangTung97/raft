@@ -72,3 +72,80 @@ func TestRaft_Append_Internal(t *testing.T) {
 		}, inputs[0].Entries)
 	})
 }
+
+func TestRaft_Append_RPC(t *testing.T) {
+	t.Run("normal", func(t *testing.T) {
+		r := newRaftTestWith3Nodes()
+		r.raft.Start()
+
+		assert.Equal(t, 1, len(r.timer.AddDurations))
+
+		entry1 := LogEntry{
+			Index: 1,
+			Term:  initTerm + 1,
+			Data:  []byte("data 01"),
+		}
+
+		output := r.raft.AppendEntriesRPC(AppendEntriesInput{
+			NodeID:   node1,
+			Term:     initTerm + 1,
+			LeaderID: node2,
+
+			PrevLogTerm:  0,
+			PrevLogIndex: 0,
+
+			Entries: []LogEntry{
+				entry1,
+			},
+		})
+		assert.Equal(t, AppendEntriesOutput{
+			Term:    initTerm + 1,
+			Success: true,
+		}, output)
+
+		assert.Equal(t, [][]LogEntry{
+			{entry1},
+		}, r.storage.AppendEntriesInputs)
+		assert.Equal(t, []bool{true}, r.storage.AppendEntriesIsSyncs)
+
+		assert.Equal(t, 1, r.timer.CancelCalls)
+		assert.Equal(t, []int{1}, r.timer.CancelIDs)
+
+		assert.Equal(t, 2, len(r.timer.AddDurations))
+	})
+
+	t.Run("term is smaller than current", func(t *testing.T) {
+		r := newRaftTestWith3Nodes()
+		r.raft.Start()
+
+		assert.Equal(t, 1, len(r.timer.AddDurations))
+
+		const term = initTerm - 1
+
+		entry1 := LogEntry{
+			Index: 1,
+			Term:  term,
+			Data:  []byte("data 01"),
+		}
+
+		output := r.raft.AppendEntriesRPC(AppendEntriesInput{
+			NodeID:   node1,
+			Term:     term,
+			LeaderID: node2,
+
+			PrevLogTerm:  0,
+			PrevLogIndex: 0,
+
+			Entries: []LogEntry{
+				entry1,
+			},
+		})
+		assert.Equal(t, AppendEntriesOutput{
+			Term:    initTerm,
+			Success: false,
+		}, output)
+
+		assert.Equal(t, 0, len(r.storage.AppendEntriesInputs))
+		assert.Equal(t, 0, r.timer.CancelCalls)
+	})
+}

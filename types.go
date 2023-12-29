@@ -76,7 +76,7 @@ type Storage interface {
 	GetState() NullStorageState
 	PutState(state StorageState)
 
-	AppendEntries(entries []LogEntry, handler func())
+	AppendEntries(entries []LogEntry, isSync bool, handler func())
 	GetEntries(from LogIndex, limit uint64, handler func(entries []LogEntry))
 	GetLastEntry() LogEntry // return zero term if empty
 

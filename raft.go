@@ -18,11 +18,19 @@ type Raft struct {
 	timer   Timer
 	client  Client
 
-	state     raftState
+	state raftState
+
+	timerCounter uint64
+
+	follower  *followerState
 	candidate *candidateState
 	leader    *leaderState
 
 	storageState StorageState
+}
+
+type followerState struct {
+	timerCancel TimerCancelFunc
 }
 
 type candidateState struct {
@@ -65,7 +73,11 @@ func (r *Raft) isMajority(nodeSet map[NodeID]struct{}) bool {
 	return false
 }
 
-func (r *Raft) handleTimeout() {
+func (r *Raft) handleFollowerTimeout(counter uint64) {
+	if r.timerCounter != counter {
+		return
+	}
+
 	r.storageState.CurrentTerm++
 	r.storageState.VotedFor = NullNodeID{
 		Valid:  true,
@@ -74,14 +86,7 @@ func (r *Raft) handleTimeout() {
 
 	r.storage.PutState(r.storageState)
 
-	r.state = raftStateCandidate
-	r.candidate = &candidateState{
-		votedNodes: map[NodeID]struct{}{
-			r.storageState.NodeID: {},
-		},
-		rejectedNodes: map[NodeID]struct{}{},
-		errorNodes:    map[NodeID]struct{}{},
-	}
+	r.becomeCandidate()
 
 	// do request votes
 	for _, id := range r.storageState.ClusterNodes {
@@ -103,15 +108,14 @@ func (r *Raft) callRequestVote(nodeID NodeID) {
 	})
 }
 
-func (r *Raft) checkResponseTerm(term TermNumber, votedFor NullNodeID) {
+func (r *Raft) checkRequestResponseTerm(term TermNumber, votedFor NullNodeID) {
 	if term > r.storageState.CurrentTerm {
 		r.storageState.CurrentTerm = term
 		r.storageState.VotedFor = votedFor
 
 		r.storage.PutState(r.storageState)
 
-		r.state = raftStateFollower
-		r.candidate = nil
+		r.becomeFollower()
 	}
 }
 
@@ -162,9 +166,7 @@ func (r *Raft) candidateSwitchBackToFollowerIfPossible() {
 		return
 	}
 
-	r.state = raftStateFollower
-	r.candidate = nil
-	r.startFollowerTimer()
+	r.becomeFollower()
 }
 
 func (r *Raft) handleVoteResponse(nodeID NodeID, output RequestVoteOutput, err error) {
@@ -181,7 +183,7 @@ func (r *Raft) handleVoteResponse(nodeID NodeID, output RequestVoteOutput, err e
 		return
 	}
 
-	r.checkResponseTerm(output.Term, NullNodeID{})
+	r.checkRequestResponseTerm(output.Term, NullNodeID{})
 
 	if r.state != raftStateCandidate {
 		return
@@ -198,11 +200,7 @@ func (r *Raft) handleVoteResponse(nodeID NodeID, output RequestVoteOutput, err e
 		return
 	}
 
-	r.state = raftStateLeader
-	r.candidate = nil
-	r.leader = &leaderState{
-		nodeIndices: map[NodeID]*nodeIndexState{},
-	}
+	r.becomeLeader()
 
 	for _, id := range r.storageState.ClusterNodes {
 		destNodeID := id
@@ -251,8 +249,40 @@ func (r *Raft) handleAppendResponse(
 	indexState.inProgress = false
 }
 
-func (r *Raft) startFollowerTimer() {
-	r.timer.AddTimer(10*time.Second, r.handleTimeout)
+func (r *Raft) becomeFollower() {
+	if r.state == raftStateFollower {
+		return
+	}
+	r.state = raftStateFollower
+	r.candidate = nil
+	r.leader = nil
+	r.follower = &followerState{}
+	r.addFollowerTimer()
+}
+
+func (r *Raft) becomeCandidate() {
+	r.follower.timerCancel()
+
+	r.state = raftStateCandidate
+	r.candidate = &candidateState{
+		votedNodes: map[NodeID]struct{}{
+			r.storageState.NodeID: {},
+		},
+		rejectedNodes: map[NodeID]struct{}{},
+		errorNodes:    map[NodeID]struct{}{},
+	}
+
+	r.leader = nil
+	r.follower = nil
+}
+
+func (r *Raft) becomeLeader() {
+	r.state = raftStateLeader
+	r.candidate = nil
+	r.follower = nil
+	r.leader = &leaderState{
+		nodeIndices: map[NodeID]*nodeIndexState{},
+	}
 }
 
 // Start ...
@@ -262,12 +292,13 @@ func (r *Raft) Start() {
 
 	r.storageState = nullState.State
 
-	r.startFollowerTimer()
+	r.state = 0
+	r.becomeFollower()
 }
 
 // RequestVote ...
 func (r *Raft) RequestVote(input RequestVoteInput) RequestVoteOutput {
-	r.checkResponseTerm(input.Term, NullNodeID{
+	r.checkRequestResponseTerm(input.Term, NullNodeID{
 		Valid:  true,
 		NodeID: input.CandidateID,
 	})
@@ -286,9 +317,35 @@ func (r *Raft) RequestVote(input RequestVoteInput) RequestVoteOutput {
 	}
 }
 
+func (r *Raft) addFollowerTimer() {
+	r.timerCounter++
+	counter := r.timerCounter
+	r.follower.timerCancel = r.timer.AddTimer(10*time.Second, func() {
+		r.handleFollowerTimeout(counter)
+	})
+}
+
 // AppendEntriesRPC ...
 func (r *Raft) AppendEntriesRPC(input AppendEntriesInput) AppendEntriesOutput {
-	return AppendEntriesOutput{}
+	if input.Term < r.storageState.CurrentTerm {
+		return AppendEntriesOutput{
+			Term:    r.storageState.CurrentTerm,
+			Success: false,
+		}
+	}
+
+	r.checkRequestResponseTerm(input.Term, NullNodeID{})
+	r.follower.timerCancel()
+	r.addFollowerTimer()
+
+	if len(input.Entries) > 0 {
+		r.storage.AppendEntries(input.Entries, true, nil)
+	}
+
+	return AppendEntriesOutput{
+		Term:    r.storageState.CurrentTerm,
+		Success: true,
+	}
 }
 
 // AppendEntriesInternal ...
@@ -301,7 +358,8 @@ func (r *Raft) AppendEntriesInternal(entries []LogEntry) {
 		entries[i].Index = lastIndex
 	}
 
-	r.storage.AppendEntries(entries, func() {
+	r.storage.AppendEntries(entries, false, func() {
+		// TODO Handle Entry
 	})
 
 	for _, id := range r.storageState.ClusterNodes {

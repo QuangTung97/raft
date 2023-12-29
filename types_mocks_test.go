@@ -35,6 +35,7 @@ type StorageMock struct {
 	PutStateInputs []StorageState
 
 	AppendEntriesInputs   [][]LogEntry
+	AppendEntriesIsSyncs  []bool
 	AppendEntriesHandlers []func()
 
 	GetEntriesFromIndices []LogIndex
@@ -65,8 +66,9 @@ func (m *StorageMock) PutState(state StorageState) {
 }
 
 // AppendEntries ...
-func (m *StorageMock) AppendEntries(entries []LogEntry, handler func()) {
+func (m *StorageMock) AppendEntries(entries []LogEntry, isSync bool, handler func()) {
 	m.AppendEntriesInputs = append(m.AppendEntriesInputs, entries)
+	m.AppendEntriesIsSyncs = append(m.AppendEntriesIsSyncs, isSync)
 	m.AppendEntriesHandlers = append(m.AppendEntriesHandlers, handler)
 
 	first := entries[0].Index
