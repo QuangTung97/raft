@@ -19,7 +19,7 @@ type TermNumber uint64
 // LogIndex ...
 type LogIndex uint64
 
-// NodeID a node id
+// NodeID a node id, should be an uuid
 type NodeID [16]byte
 
 // NullNodeID ...
@@ -44,6 +44,9 @@ type StorageState struct {
 	NodeID      NodeID
 	CurrentTerm TermNumber
 	VotedFor    NullNodeID
+
+	ClusterNodes []NodeID
+	ClusterIndex LogIndex
 }
 
 // NullStorageState ...
@@ -52,12 +55,33 @@ type NullStorageState struct {
 	State StorageState
 }
 
+type MembershipLogType int
+
+const (
+	// MembershipLogTypeNormal ...
+	MembershipLogTypeNormal MembershipLogType = iota + 1
+
+	// MembershipLogTypeJointConsensus ...
+	MembershipLogTypeJointConsensus
+)
+
+type MembershipLogEntry struct {
+	Type      MembershipLogType
+	OldConfig []NodeID // non-empty only for joint-consensus
+	Config    []NodeID
+}
+
 // Storage ...
 type Storage interface {
-	GetState() (StorageState, error)
+	GetState() (NullStorageState, error)
+	PutState(state StorageState) error
 
 	AppendEntries(entries []LogEntry, handler func(err error))
 	DeleteEntries(from LogIndex, handler func(err error))
+
+	GetEntries(from LogIndex, limit uint64, handler func(entries []LogEntry, err error))
+
+	IsMembershipLogEntry(entry LogEntry) (MembershipLogEntry, bool)
 }
 
 // ===============================
@@ -66,6 +90,7 @@ type Storage interface {
 
 // RequestVoteInput ...
 type RequestVoteInput struct {
+	NodeID       NodeID // destination node id
 	Term         TermNumber
 	CandidateID  NodeID
 	LastLogIndex LogIndex
@@ -83,6 +108,8 @@ type RequestVoteHandler func(output RequestVoteOutput, err error)
 
 // AppendEntriesInput ...
 type AppendEntriesInput struct {
+	NodeID NodeID // destination node id
+
 	Term     TermNumber
 	LeaderID NodeID
 
