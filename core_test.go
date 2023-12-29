@@ -23,11 +23,6 @@ func newRaftTest() *raftTest {
 	}
 
 	r.raft = NewRaft(r.storage, r.timer, r.client)
-
-	r.storage.PutStateFunc = func() error {
-		return nil
-	}
-
 	return r
 }
 
@@ -41,7 +36,7 @@ const initTerm = TermNumber(70)
 
 func newRaftTestWith3Nodes() *raftTest {
 	r := newRaftTest()
-	r.storage.GetStateFunc = func() (NullStorageState, error) {
+	r.storage.GetStateFunc = func() NullStorageState {
 		return NullStorageState{
 			Valid: true,
 			State: StorageState{
@@ -52,7 +47,7 @@ func newRaftTestWith3Nodes() *raftTest {
 				ClusterNodes: []NodeID{node1, node2, node3},
 				ClusterIndex: 0,
 			},
-		}, nil
+		}
 	}
 	return r
 }
@@ -412,7 +407,7 @@ func TestRaft_RequestVote(t *testing.T) {
 
 func newRaftTestWith5Nodes() *raftTest {
 	r := newRaftTest()
-	r.storage.GetStateFunc = func() (NullStorageState, error) {
+	r.storage.GetStateFunc = func() NullStorageState {
 		return NullStorageState{
 			Valid: true,
 			State: StorageState{
@@ -423,7 +418,7 @@ func newRaftTestWith5Nodes() *raftTest {
 				ClusterNodes: []NodeID{node1, node2, node3, node4, node5},
 				ClusterIndex: 0,
 			},
-		}, nil
+		}
 	}
 	return r
 }

@@ -61,10 +61,7 @@ func (r *Raft) handleTimeout() {
 		NodeID: r.storageState.NodeID,
 	}
 
-	err := r.storage.PutState(r.storageState)
-	if err != nil {
-		panic(err)
-	}
+	r.storage.PutState(r.storageState)
 
 	r.state = raftStateCandidate
 	r.candidate = &candidateState{
@@ -100,10 +97,7 @@ func (r *Raft) checkResponseTerm(term TermNumber, votedFor NullNodeID) {
 		r.storageState.CurrentTerm = term
 		r.storageState.VotedFor = votedFor
 
-		err := r.storage.PutState(r.storageState)
-		if err != nil {
-			panic(err)
-		}
+		r.storage.PutState(r.storageState)
 
 		r.state = raftStateFollower
 		r.candidate = nil
@@ -215,10 +209,8 @@ func (r *Raft) startFollowerTimer() {
 }
 
 func (r *Raft) Start() {
-	nullState, err := r.storage.GetState()
-	if err != nil {
-		panic(err)
-	}
+	// TODO Check Null
+	nullState := r.storage.GetState()
 
 	r.storageState = nullState.State
 

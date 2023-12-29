@@ -73,13 +73,13 @@ type MembershipLogEntry struct {
 
 // Storage ...
 type Storage interface {
-	GetState() (NullStorageState, error)
-	PutState(state StorageState) error
+	GetState() NullStorageState
+	PutState(state StorageState)
 
-	AppendEntries(entries []LogEntry, handler func(err error))
-	DeleteEntries(from LogIndex, handler func(err error))
+	AppendEntries(entries []LogEntry, handler func())
+	DeleteEntries(from LogIndex, handler func())
 
-	GetEntries(from LogIndex, limit uint64, handler func(entries []LogEntry, err error))
+	GetEntries(from LogIndex, limit uint64, handler func(entries []LogEntry))
 
 	IsMembershipLogEntry(entry LogEntry) (MembershipLogEntry, bool)
 }
@@ -134,4 +134,11 @@ type AppendEntriesHandler func(output AppendEntriesOutput, err error)
 type Client interface {
 	RequestVote(input RequestVoteInput, handler RequestVoteHandler)
 	AppendEntries(input AppendEntriesInput, handler AppendEntriesHandler)
+}
+
+// StateMachine ...
+type StateMachine interface {
+	LeaderChanged(term TermNumber, leaderID NodeID)
+	Apply(entries []LogEntry)
+	GetLastAppliedIndex() LogIndex
 }

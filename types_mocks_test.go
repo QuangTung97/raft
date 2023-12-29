@@ -30,50 +30,48 @@ func (m *ClientMock) AppendEntries(input AppendEntriesInput, handler AppendEntri
 // StorageMock ...
 type StorageMock struct {
 	GetStateCalls int
-	GetStateFunc  func() (NullStorageState, error)
+	GetStateFunc  func() NullStorageState
 
 	PutStateInputs []StorageState
-	PutStateFunc   func() error
 
 	AppendEntriesInputs   [][]LogEntry
-	AppendEntriesHandlers []func(err error)
+	AppendEntriesHandlers []func()
 
 	DeleteEntriesFromIndices []LogIndex
-	DeleteEntriesHandlers    []func(err error)
+	DeleteEntriesHandlers    []func()
 
 	GetEntriesFromIndices []LogIndex
 	GetEntriesLimits      []uint64
-	GetEntriesHandlers    []func(entries []LogEntry, err error)
+	GetEntriesHandlers    []func(entries []LogEntry)
 }
 
 var _ Storage = &StorageMock{}
 
 // GetState ...
-func (m *StorageMock) GetState() (NullStorageState, error) {
+func (m *StorageMock) GetState() NullStorageState {
 	m.GetStateCalls++
 	return m.GetStateFunc()
 }
 
 // PutState ...
-func (m *StorageMock) PutState(state StorageState) error {
+func (m *StorageMock) PutState(state StorageState) {
 	m.PutStateInputs = append(m.PutStateInputs, state)
-	return m.PutStateFunc()
 }
 
 // AppendEntries ...
-func (m *StorageMock) AppendEntries(entries []LogEntry, handler func(err error)) {
+func (m *StorageMock) AppendEntries(entries []LogEntry, handler func()) {
 	m.AppendEntriesInputs = append(m.AppendEntriesInputs, entries)
 	m.AppendEntriesHandlers = append(m.AppendEntriesHandlers, handler)
 }
 
 // DeleteEntries ...
-func (m *StorageMock) DeleteEntries(from LogIndex, handler func(err error)) {
+func (m *StorageMock) DeleteEntries(from LogIndex, handler func()) {
 	m.DeleteEntriesFromIndices = append(m.DeleteEntriesFromIndices, from)
 	m.DeleteEntriesHandlers = append(m.DeleteEntriesHandlers, handler)
 }
 
 // GetEntries ...
-func (m *StorageMock) GetEntries(from LogIndex, limit uint64, handler func(entries []LogEntry, err error)) {
+func (m *StorageMock) GetEntries(from LogIndex, limit uint64, handler func(entries []LogEntry)) {
 	m.GetEntriesFromIndices = append(m.GetEntriesFromIndices, from)
 	m.GetEntriesLimits = append(m.GetEntriesLimits, limit)
 	m.GetEntriesHandlers = append(m.GetEntriesHandlers, handler)
