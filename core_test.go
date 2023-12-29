@@ -198,3 +198,65 @@ func TestRaft_Start(t *testing.T) {
 		assert.Equal(t, raftStateLeader, r.raft.state)
 	})
 }
+
+func TestRaft_RequestVote(t *testing.T) {
+	t.Run("first times", func(t *testing.T) {
+		r := newRaftTestWith3Nodes()
+		r.raft.Start()
+
+		output := r.raft.RequestVote(RequestVoteInput{
+			Term:         initTerm + 1,
+			CandidateID:  node2,
+			LastLogIndex: 0,
+			LastLogTerm:  0,
+		})
+		assert.Equal(t, initTerm+1, output.Term)
+		assert.Equal(t, true, output.VoteGranted)
+
+		// store state
+		states := r.storage.PutStateInputs
+		assert.Equal(t, 1, len(states))
+		assert.Equal(t, initTerm+1, states[0].CurrentTerm)
+		assert.Equal(t, NullNodeID{
+			Valid:  true,
+			NodeID: node2,
+		}, states[0].VotedFor)
+	})
+
+	t.Run("second times rejected", func(t *testing.T) {
+		r := newRaftTestWith3Nodes()
+		r.raft.Start()
+
+		output := r.raft.RequestVote(RequestVoteInput{
+			Term:         initTerm + 1,
+			CandidateID:  node2,
+			LastLogIndex: 0,
+			LastLogTerm:  0,
+		})
+		assert.Equal(t, initTerm+1, output.Term)
+		assert.Equal(t, true, output.VoteGranted)
+
+		// second time
+		output = r.raft.RequestVote(RequestVoteInput{
+			Term:         initTerm + 1,
+			CandidateID:  node3,
+			LastLogIndex: 0,
+			LastLogTerm:  0,
+		})
+		assert.Equal(t, initTerm+1, output.Term)
+		assert.Equal(t, false, output.VoteGranted)
+
+		// same as the first time
+		output = r.raft.RequestVote(RequestVoteInput{
+			Term:         initTerm + 1,
+			CandidateID:  node2,
+			LastLogIndex: 0,
+			LastLogTerm:  0,
+		})
+		assert.Equal(t, initTerm+1, output.Term)
+		assert.Equal(t, true, output.VoteGranted)
+
+		states := r.storage.PutStateInputs
+		assert.Equal(t, 1, len(states))
+	})
+}

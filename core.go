@@ -84,10 +84,10 @@ func (r *Raft) handleTimeout() {
 	}
 }
 
-func (r *Raft) checkResponseTerm(term TermNumber) {
+func (r *Raft) checkResponseTerm(term TermNumber, votedFor NullNodeID) {
 	if term > r.storageState.CurrentTerm {
 		r.storageState.CurrentTerm = term
-		r.storageState.VotedFor = NullNodeID{}
+		r.storageState.VotedFor = votedFor
 
 		err := r.storage.PutState(r.storageState)
 		if err != nil {
@@ -100,7 +100,7 @@ func (r *Raft) checkResponseTerm(term TermNumber) {
 }
 
 func (r *Raft) handleVoteResponse(nodeID NodeID, output RequestVoteOutput, err error) {
-	r.checkResponseTerm(output.Term)
+	r.checkResponseTerm(output.Term, NullNodeID{})
 	if r.state != raftStateCandidate {
 		return
 	}
@@ -139,4 +139,22 @@ func (r *Raft) Start() {
 
 	r.storageState = nullState.State
 	r.timer.AddTimer(10*time.Second, r.handleTimeout)
+}
+
+func (r *Raft) RequestVote(input RequestVoteInput) RequestVoteOutput {
+	r.checkResponseTerm(input.Term, NullNodeID{
+		Valid:  true,
+		NodeID: input.CandidateID,
+	})
+
+	granted := false
+	votedFor := r.storageState.VotedFor
+	if votedFor.Valid && votedFor.NodeID == input.CandidateID {
+		granted = true
+	}
+
+	return RequestVoteOutput{
+		Term:        input.Term,
+		VoteGranted: granted,
+	}
 }
