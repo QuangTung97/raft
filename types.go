@@ -77,9 +77,8 @@ type Storage interface {
 	PutState(state StorageState)
 
 	AppendEntries(entries []LogEntry, handler func())
-	DeleteEntries(from LogIndex, handler func())
-
 	GetEntries(from LogIndex, limit uint64, handler func(entries []LogEntry))
+	GetLastEntry() LogEntry // return zero term if empty
 
 	IsMembershipLogEntry(entry LogEntry) (MembershipLogEntry, bool)
 }
@@ -113,8 +112,8 @@ type AppendEntriesInput struct {
 	Term     TermNumber
 	LeaderID NodeID
 
-	PrevLogIndex LogIndex
 	PrevLogTerm  TermNumber
+	PrevLogIndex LogIndex
 
 	Entries []LogEntry
 
@@ -138,7 +137,6 @@ type Client interface {
 
 // StateMachine ...
 type StateMachine interface {
-	LeaderChanged(term TermNumber, leaderID NodeID)
-	Apply(entries []LogEntry)
-	GetLastAppliedIndex() LogIndex
+	LeaderChanged(term TermNumber, leaderID NodeID, lastLogIndex LogIndex)
+	Apply(entries []LogEntry, handler func())
 }

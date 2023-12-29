@@ -37,15 +37,21 @@ type StorageMock struct {
 	AppendEntriesInputs   [][]LogEntry
 	AppendEntriesHandlers []func()
 
-	DeleteEntriesFromIndices []LogIndex
-	DeleteEntriesHandlers    []func()
-
 	GetEntriesFromIndices []LogIndex
 	GetEntriesLimits      []uint64
-	GetEntriesHandlers    []func(entries []LogEntry)
+	LogEntries            []LogEntry
+	GetEntriesHandlers    []func()
 }
 
 var _ Storage = &StorageMock{}
+
+func NewStorageMock() *StorageMock {
+	return &StorageMock{
+		LogEntries: []LogEntry{
+			{Index: 0, Term: 0},
+		},
+	}
+}
 
 // GetState ...
 func (m *StorageMock) GetState() NullStorageState {
@@ -62,19 +68,31 @@ func (m *StorageMock) PutState(state StorageState) {
 func (m *StorageMock) AppendEntries(entries []LogEntry, handler func()) {
 	m.AppendEntriesInputs = append(m.AppendEntriesInputs, entries)
 	m.AppendEntriesHandlers = append(m.AppendEntriesHandlers, handler)
-}
 
-// DeleteEntries ...
-func (m *StorageMock) DeleteEntries(from LogIndex, handler func()) {
-	m.DeleteEntriesFromIndices = append(m.DeleteEntriesFromIndices, from)
-	m.DeleteEntriesHandlers = append(m.DeleteEntriesHandlers, handler)
+	first := entries[0].Index
+	m.LogEntries = m.LogEntries[:first]
+	m.LogEntries = append(m.LogEntries, entries...)
 }
 
 // GetEntries ...
 func (m *StorageMock) GetEntries(from LogIndex, limit uint64, handler func(entries []LogEntry)) {
 	m.GetEntriesFromIndices = append(m.GetEntriesFromIndices, from)
 	m.GetEntriesLimits = append(m.GetEntriesLimits, limit)
-	m.GetEntriesHandlers = append(m.GetEntriesHandlers, handler)
+	m.GetEntriesHandlers = append(m.GetEntriesHandlers, func() {
+		var input []LogEntry
+		for i := from; i < from+LogIndex(limit); i++ {
+			if int(i) >= len(m.LogEntries) {
+				break
+			}
+			input = append(input, m.LogEntries[i])
+		}
+		handler(input)
+	})
+}
+
+// GetLastEntry ...
+func (m *StorageMock) GetLastEntry() LogEntry {
+	return LogEntry{}
 }
 
 // IsMembershipLogEntry ...

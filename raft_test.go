@@ -17,7 +17,7 @@ type raftTest struct {
 
 func newRaftTest() *raftTest {
 	r := &raftTest{
-		storage: &StorageMock{},
+		storage: NewStorageMock(),
 		timer:   &TimerMock{},
 		client:  &ClientMock{},
 	}
@@ -122,6 +122,15 @@ func TestRaft_Start(t *testing.T) {
 		}, nil)
 
 		assert.Equal(t, raftStateLeader, r.raft.state)
+
+		// do get entries
+		getEntries := r.storage.GetEntriesHandlers
+		assert.Equal(t, 2, len(getEntries))
+		assert.Equal(t, []LogIndex{0, 0}, r.storage.GetEntriesFromIndices)
+		assert.Equal(t, []uint64{128, 128}, r.storage.GetEntriesLimits)
+
+		getEntries[0]()
+		getEntries[1]()
 
 		// do call append entries
 		inputs := r.client.AppendInputs

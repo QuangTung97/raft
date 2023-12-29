@@ -20,6 +20,7 @@ type Raft struct {
 
 	state     raftState
 	candidate *candidateState
+	leader    *leaderState
 
 	storageState StorageState
 }
@@ -28,6 +29,16 @@ type candidateState struct {
 	votedNodes    map[NodeID]struct{}
 	rejectedNodes map[NodeID]struct{}
 	errorNodes    map[NodeID]struct{}
+}
+
+type nodeIndexState struct {
+	nextIndex  LogIndex
+	inProgress bool
+	matchIndex LogIndex
+}
+
+type leaderState struct {
+	nodeIndices map[NodeID]*nodeIndexState
 }
 
 func NewRaft(storage Storage, timer Timer, client Client) *Raft {
@@ -189,25 +200,62 @@ func (r *Raft) handleVoteResponse(nodeID NodeID, output RequestVoteOutput, err e
 
 	r.state = raftStateLeader
 	r.candidate = nil
+	r.leader = &leaderState{
+		nodeIndices: map[NodeID]*nodeIndexState{},
+	}
 
 	for _, id := range r.storageState.ClusterNodes {
 		destNodeID := id
 		if id == r.storageState.NodeID {
 			continue
 		}
+		r.callAppendEntries(destNodeID)
+	}
+}
+
+func (r *Raft) callAppendEntries(nodeID NodeID) {
+	indexState := r.leader.nodeIndices[nodeID]
+	if indexState == nil {
+		indexState = &nodeIndexState{
+			nextIndex:  1,
+			matchIndex: 0,
+		}
+		r.leader.nodeIndices[nodeID] = indexState
+	}
+
+	if indexState.inProgress {
+		return
+	}
+	indexState.inProgress = true
+
+	r.storage.GetEntries(indexState.nextIndex-1, 128, func(entries []LogEntry) {
 		r.client.AppendEntries(AppendEntriesInput{
-			NodeID:   destNodeID,
+			NodeID: nodeID,
+
 			Term:     r.storageState.CurrentTerm,
 			LeaderID: r.storageState.NodeID,
+
+			PrevLogIndex: entries[0].Index,
+			PrevLogTerm:  entries[0].Term,
+
+			Entries: entries[1:],
 		}, func(output AppendEntriesOutput, err error) {
+			r.handleAppendResponse(indexState, output, err)
 		})
-	}
+	})
+}
+
+func (r *Raft) handleAppendResponse(
+	indexState *nodeIndexState, output AppendEntriesOutput, err error,
+) {
+	indexState.inProgress = false
 }
 
 func (r *Raft) startFollowerTimer() {
 	r.timer.AddTimer(10*time.Second, r.handleTimeout)
 }
 
+// Start ...
 func (r *Raft) Start() {
 	// TODO Check Null
 	nullState := r.storage.GetState()
@@ -217,6 +265,7 @@ func (r *Raft) Start() {
 	r.startFollowerTimer()
 }
 
+// RequestVote ...
 func (r *Raft) RequestVote(input RequestVoteInput) RequestVoteOutput {
 	r.checkResponseTerm(input.Term, NullNodeID{
 		Valid:  true,
@@ -234,5 +283,32 @@ func (r *Raft) RequestVote(input RequestVoteInput) RequestVoteOutput {
 	return RequestVoteOutput{
 		Term:        r.storageState.CurrentTerm,
 		VoteGranted: granted,
+	}
+}
+
+// AppendEntriesRPC ...
+func (r *Raft) AppendEntriesRPC(input AppendEntriesInput) AppendEntriesOutput {
+	return AppendEntriesOutput{}
+}
+
+// AppendEntriesInternal ...
+func (r *Raft) AppendEntriesInternal(entries []LogEntry) {
+	lastEntry := r.storage.GetLastEntry()
+
+	lastIndex := lastEntry.Index
+	for i := range entries {
+		lastIndex++
+		entries[i].Index = lastIndex
+	}
+
+	r.storage.AppendEntries(entries, func() {
+	})
+
+	for _, id := range r.storageState.ClusterNodes {
+		nodeID := id
+		if nodeID == r.storageState.NodeID {
+			continue
+		}
+		r.callAppendEntries(nodeID)
 	}
 }
