@@ -15,6 +15,12 @@ type ClientMock struct {
 
 var _ Client = &ClientMock{}
 
+// ResetAppend ...
+func (m *ClientMock) ResetAppend() {
+	m.AppendInputs = nil
+	m.AppendHandlers = nil
+}
+
 // RequestVote ...
 func (m *ClientMock) RequestVote(input RequestVoteInput, handler RequestVoteHandler) {
 	m.RequestVoteInputs = append(m.RequestVoteInputs, input)
@@ -42,6 +48,10 @@ type StorageMock struct {
 	GetEntriesLimits      []uint64
 	LogEntries            []LogEntry
 	GetEntriesHandlers    []func()
+
+	CommitIndex          LogIndex
+	GetCommitIndexCalls  int
+	SetCommitIndexInputs []LogIndex
 }
 
 var _ Storage = &StorageMock{}
@@ -52,6 +62,20 @@ func NewStorageMock() *StorageMock {
 			{Index: 0, Term: 0},
 		},
 	}
+}
+
+// ResetAppendEntries ...
+func (m *StorageMock) ResetAppendEntries() {
+	m.AppendEntriesInputs = nil
+	m.AppendEntriesIsSyncs = nil
+	m.AppendEntriesHandlers = nil
+}
+
+// ResetGetEntries ...
+func (m *StorageMock) ResetGetEntries() {
+	m.GetEntriesFromIndices = nil
+	m.GetEntriesLimits = nil
+	m.GetEntriesHandlers = nil
 }
 
 // GetState ...
@@ -100,6 +124,18 @@ func (m *StorageMock) GetLastEntry() LogEntry {
 // IsMembershipLogEntry ...
 func (m *StorageMock) IsMembershipLogEntry(_ LogEntry) (MembershipLogEntry, bool) {
 	return MembershipLogEntry{}, false
+}
+
+// GetCommitIndex ...
+func (m *StorageMock) GetCommitIndex() LogIndex {
+	m.GetCommitIndexCalls++
+	return m.CommitIndex
+}
+
+// SetCommitIndex ...
+func (m *StorageMock) SetCommitIndex(index LogIndex) {
+	m.CommitIndex = index
+	m.SetCommitIndexInputs = append(m.SetCommitIndexInputs, index)
 }
 
 // TimerMock ...

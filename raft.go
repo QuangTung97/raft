@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"math"
 	"time"
 )
 
@@ -227,7 +228,7 @@ func (r *Raft) handleVoteResponse(nodeID NodeID, output RequestVoteOutput, err e
 	}
 }
 
-func (r *Raft) callAppendEntries(nodeID NodeID) {
+func (r *Raft) getIndexState(nodeID NodeID) *nodeIndexState {
 	indexState := r.leader.nodeIndices[nodeID]
 	if indexState == nil {
 		indexState = &nodeIndexState{
@@ -236,7 +237,11 @@ func (r *Raft) callAppendEntries(nodeID NodeID) {
 		}
 		r.leader.nodeIndices[nodeID] = indexState
 	}
+	return indexState
+}
 
+func (r *Raft) callAppendEntries(nodeID NodeID) {
+	indexState := r.getIndexState(nodeID)
 	if indexState.inProgress {
 		return
 	}
@@ -246,8 +251,11 @@ func (r *Raft) callAppendEntries(nodeID NodeID) {
 
 	r.storage.GetEntries(indexState.nextIndex-1, 128, func(entries []LogEntry) {
 		if !ss.isValid() {
-			return
+			return // TODO
 		}
+
+		newSS := r.getStateSnapshot()
+		lastEntry := entries[len(entries)-1]
 
 		r.client.AppendEntries(AppendEntriesInput{
 			NodeID: nodeID,
@@ -260,15 +268,61 @@ func (r *Raft) callAppendEntries(nodeID NodeID) {
 
 			Entries: entries[1:],
 		}, func(output AppendEntriesOutput, err error) {
-			r.handleAppendResponse(indexState, output, err)
+			// TODO Check Term
+
+			// TODO Check Error
+
+			if !newSS.isValid() {
+				// TODO
+			}
+			if !output.Success {
+				// TODO
+			}
+			r.handleAppendResponse(indexState, output, err, lastEntry.Index)
 		})
 	})
 }
 
 func (r *Raft) handleAppendResponse(
-	indexState *nodeIndexState, output AppendEntriesOutput, err error,
+	indexState *nodeIndexState, output AppendEntriesOutput, err error, lastIndex LogIndex,
 ) {
+	r.increaseMatchIndex(indexState, lastIndex)
+}
+
+func (r *Raft) increaseMatchIndex(indexState *nodeIndexState, lastIndex LogIndex) {
 	indexState.inProgress = false
+	if lastIndex > indexState.matchIndex {
+		indexState.matchIndex = lastIndex
+		r.increaseCommitIndex()
+	}
+}
+
+func (r *Raft) assertTrue(b bool) {
+	if !b {
+		panic("invalid assertion")
+	}
+}
+
+func (r *Raft) increaseCommitIndex() {
+	r.assertTrue(len(r.leader.nodeIndices) > 0)
+
+	lastCommitIndex := r.storage.GetCommitIndex()
+	minIndex := LogIndex(math.MaxUint64)
+	greaterCount := 0
+
+	for _, indexState := range r.leader.nodeIndices {
+		if indexState.matchIndex > lastCommitIndex {
+			greaterCount++
+			if indexState.matchIndex < minIndex {
+				minIndex = indexState.matchIndex
+			}
+		}
+	}
+
+	majority := len(r.storageState.ClusterNodes)/2 + 1
+	if greaterCount >= majority {
+		r.storage.SetCommitIndex(minIndex)
+	}
 }
 
 func (r *Raft) becomeFollower() {
@@ -384,6 +438,26 @@ func (r *Raft) AppendEntriesRPC(input AppendEntriesInput) AppendEntriesOutput {
 	}
 }
 
+func (r *Raft) storageAppendEntriesAsync(entries []LogEntry) {
+	state := r.getIndexState(r.storageState.NodeID)
+	if state.inProgress {
+		return // TODO
+	}
+	state.inProgress = true
+
+	lastIndex := entries[len(entries)-1].Index
+
+	ss := r.getStateSnapshot()
+
+	r.storage.AppendEntries(entries, false, func() {
+		if !ss.isValid() {
+			// TODO
+		}
+		state.inProgress = false
+		r.increaseMatchIndex(state, lastIndex)
+	})
+}
+
 // AppendEntriesInternal from the state machine
 func (r *Raft) AppendEntriesInternal(entries []LogEntry) {
 	lastEntry := r.storage.GetLastEntry()
@@ -394,9 +468,7 @@ func (r *Raft) AppendEntriesInternal(entries []LogEntry) {
 		entries[i].Index = lastIndex
 	}
 
-	r.storage.AppendEntries(entries, false, func() {
-		// TODO Handle Entry
-	})
+	r.storageAppendEntriesAsync(entries)
 
 	for _, id := range r.storageState.ClusterNodes {
 		nodeID := id

@@ -81,6 +81,9 @@ type Storage interface {
 	GetLastEntry() LogEntry // return zero term if empty
 
 	IsMembershipLogEntry(entry LogEntry) (MembershipLogEntry, bool)
+
+	GetCommitIndex() LogIndex
+	SetCommitIndex(index LogIndex)
 }
 
 // ===============================
