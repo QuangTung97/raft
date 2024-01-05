@@ -79,6 +79,7 @@ type Storage interface {
 	AppendEntries(entries []LogEntry, isSync bool, handler func())
 	GetEntries(from LogIndex, limit uint64, handler func(entries []LogEntry))
 	GetLastEntry() LogEntry // return zero term if empty
+	GetStartTermEntries(beforeIndex LogIndex) []LogEntry
 
 	IsMembershipLogEntry(entry LogEntry) (MembershipLogEntry, bool)
 
@@ -127,6 +128,8 @@ type AppendEntriesInput struct {
 type AppendEntriesOutput struct {
 	Term    TermNumber
 	Success bool
+
+	StartTermEntries []LogEntry // log entries for the start of each terms
 }
 
 // AppendEntriesHandler ...

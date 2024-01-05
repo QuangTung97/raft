@@ -199,4 +199,37 @@ func TestRaft_Append_RPC(t *testing.T) {
 		assert.Equal(t, 0, len(r.storage.AppendEntriesInputs))
 		assert.Equal(t, 0, r.timer.CancelCalls)
 	})
+
+	t.Run("with existing log not matching last index", func(t *testing.T) {
+		r := newRaftTestWith3Nodes()
+		r.storage.InitLogEntries(EntryRange{Term: initTerm - 2, Num: 4})
+		r.raft.Start()
+
+		entry1 := LogEntry{
+			Index: 31,
+			Term:  initTerm,
+			Data:  []byte("data 01"),
+		}
+
+		output := r.raft.AppendEntriesRPC(AppendEntriesInput{
+			NodeID:   node1,
+			Term:     initTerm,
+			LeaderID: node2,
+
+			PrevLogTerm:  initTerm - 1,
+			PrevLogIndex: 30,
+
+			Entries: []LogEntry{
+				entry1,
+			},
+		})
+		assert.Equal(t, AppendEntriesOutput{
+			Term:    initTerm,
+			Success: false,
+		}, output)
+
+		assert.Equal(t, 0, len(r.storage.AppendEntriesInputs))
+		assert.Equal(t, 1, r.timer.CancelCalls)
+		assert.Equal(t, 2, len(r.timer.AddDurations))
+	})
 }

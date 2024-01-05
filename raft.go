@@ -410,6 +410,10 @@ func (r *Raft) addFollowerTimer() {
 	})
 }
 
+func logEntryMatch(a, b LogEntry) bool {
+	return a.Index == b.Index && a.Term == b.Term
+}
+
 // AppendEntriesRPC ...
 func (r *Raft) AppendEntriesRPC(input AppendEntriesInput) AppendEntriesOutput {
 	if input.Term < r.storageState.CurrentTerm {
@@ -428,6 +432,14 @@ func (r *Raft) AppendEntriesRPC(input AppendEntriesInput) AppendEntriesOutput {
 		r.addFollowerTimer()
 	}
 
+	lastEntry := r.storage.GetLastEntry()
+	if !logEntryMatch(lastEntry, LogEntry{Term: input.PrevLogTerm, Index: input.PrevLogIndex}) {
+		return AppendEntriesOutput{
+			Term:    r.storageState.CurrentTerm,
+			Success: false,
+		}
+	}
+
 	if len(input.Entries) > 0 {
 		r.storage.AppendEntries(input.Entries, true, nil)
 	}
@@ -440,11 +452,6 @@ func (r *Raft) AppendEntriesRPC(input AppendEntriesInput) AppendEntriesOutput {
 
 func (r *Raft) storageAppendEntriesAsync(entries []LogEntry) {
 	state := r.getIndexState(r.storageState.NodeID)
-	if state.inProgress {
-		return // TODO
-	}
-	state.inProgress = true
-
 	lastIndex := entries[len(entries)-1].Index
 
 	ss := r.getStateSnapshot()
@@ -453,7 +460,6 @@ func (r *Raft) storageAppendEntriesAsync(entries []LogEntry) {
 		if !ss.isValid() {
 			// TODO
 		}
-		state.inProgress = false
 		r.increaseMatchIndex(state, lastIndex)
 	})
 }

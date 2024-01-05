@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -118,7 +119,12 @@ func (m *StorageMock) GetEntries(from LogIndex, limit uint64, handler func(entri
 
 // GetLastEntry ...
 func (m *StorageMock) GetLastEntry() LogEntry {
-	return LogEntry{}
+	return m.LogEntries[len(m.LogEntries)-1]
+}
+
+// GetStartTermEntries ...
+func (m *StorageMock) GetStartTermEntries(beforeIndex LogIndex) []LogEntry {
+	return nil
 }
 
 // IsMembershipLogEntry ...
@@ -136,6 +142,26 @@ func (m *StorageMock) GetCommitIndex() LogIndex {
 func (m *StorageMock) SetCommitIndex(index LogIndex) {
 	m.CommitIndex = index
 	m.SetCommitIndexInputs = append(m.SetCommitIndexInputs, index)
+}
+
+// EntryRange ...
+type EntryRange struct {
+	Term TermNumber
+	Num  int
+}
+
+// InitLogEntries ...
+func (m *StorageMock) InitLogEntries(entryRanges ...EntryRange) {
+	for _, r := range entryRanges {
+		for i := 0; i < r.Num; i++ {
+			index := LogIndex(len(m.LogEntries))
+			m.LogEntries = append(m.LogEntries, LogEntry{
+				Index: index,
+				Term:  r.Term,
+				Data:  []byte(fmt.Sprintf("%d:%d", index, r.Term)),
+			})
+		}
+	}
 }
 
 // TimerMock ...
