@@ -20,8 +20,6 @@ type Raft struct {
 
 	state raftState
 
-	timerCounter uint64
-
 	follower  *followerState
 	candidate *candidateState
 	leader    *leaderState
@@ -73,11 +71,7 @@ func (r *Raft) isMajority(nodeSet map[NodeID]struct{}) bool {
 	return false
 }
 
-func (r *Raft) handleFollowerTimeout(counter uint64) {
-	if r.timerCounter != counter {
-		return
-	}
-
+func (r *Raft) handleFollowerTimeout() {
 	r.storageState.CurrentTerm++
 	r.storageState.VotedFor = NullNodeID{
 		Valid:  true,
@@ -98,20 +92,50 @@ func (r *Raft) handleFollowerTimeout(counter uint64) {
 	}
 }
 
+type stateSnapshot struct {
+	r     *Raft
+	state raftState
+	term  TermNumber
+}
+
+func (r *Raft) getStateSnapshot() stateSnapshot {
+	return stateSnapshot{
+		r:     r,
+		state: r.state,
+		term:  r.storageState.CurrentTerm,
+	}
+}
+
+func (s stateSnapshot) isValid() bool {
+	raft := s.r
+	if s.state == raft.state && s.term == raft.storageState.CurrentTerm {
+		return true
+	}
+	return false
+}
+
 func (r *Raft) callRequestVote(nodeID NodeID) {
+	ss := r.getStateSnapshot()
+
 	r.client.RequestVote(RequestVoteInput{
 		NodeID:      nodeID,
 		Term:        r.storageState.CurrentTerm,
 		CandidateID: r.storageState.NodeID,
 	}, func(output RequestVoteOutput, err error) {
+		if err == nil {
+			r.checkTerm(output.Term)
+		}
+		if !ss.isValid() {
+			return
+		}
 		r.handleVoteResponse(nodeID, output, err)
 	})
 }
 
-func (r *Raft) checkRequestResponseTerm(term TermNumber, votedFor NullNodeID) {
+func (r *Raft) checkTerm(term TermNumber) {
 	if term > r.storageState.CurrentTerm {
 		r.storageState.CurrentTerm = term
-		r.storageState.VotedFor = votedFor
+		r.storageState.VotedFor = NullNodeID{}
 
 		r.storage.PutState(r.storageState)
 
@@ -171,21 +195,13 @@ func (r *Raft) candidateSwitchBackToFollowerIfPossible() {
 
 func (r *Raft) handleVoteResponse(nodeID NodeID, output RequestVoteOutput, err error) {
 	if err != nil {
+		r.candidate.errorNodes[nodeID] = struct{}{}
+		r.candidateSwitchBackToFollowerIfPossible()
+
+		// still in candidate state
 		if r.state == raftStateCandidate {
-			r.candidate.errorNodes[nodeID] = struct{}{}
-			r.candidateSwitchBackToFollowerIfPossible()
-
-			// still in candidate state
-			if r.state == raftStateCandidate {
-				r.callRequestVote(nodeID)
-			}
+			r.callRequestVote(nodeID)
 		}
-		return
-	}
-
-	r.checkRequestResponseTerm(output.Term, NullNodeID{})
-
-	if r.state != raftStateCandidate {
 		return
 	}
 
@@ -226,7 +242,13 @@ func (r *Raft) callAppendEntries(nodeID NodeID) {
 	}
 	indexState.inProgress = true
 
+	ss := r.getStateSnapshot()
+
 	r.storage.GetEntries(indexState.nextIndex-1, 128, func(entries []LogEntry) {
+		if !ss.isValid() {
+			return
+		}
+
 		r.client.AppendEntries(AppendEntriesInput{
 			NodeID: nodeID,
 
@@ -298,10 +320,17 @@ func (r *Raft) Start() {
 
 // RequestVote ...
 func (r *Raft) RequestVote(input RequestVoteInput) RequestVoteOutput {
-	r.checkRequestResponseTerm(input.Term, NullNodeID{
-		Valid:  true,
-		NodeID: input.CandidateID,
-	})
+	if input.Term > r.storageState.CurrentTerm {
+		r.storageState.CurrentTerm = input.Term
+		r.storageState.VotedFor = NullNodeID{
+			Valid:  true,
+			NodeID: input.CandidateID,
+		}
+
+		r.storage.PutState(r.storageState)
+
+		r.becomeFollower()
+	}
 
 	granted := false
 	if input.Term >= r.storageState.CurrentTerm {
@@ -318,10 +347,12 @@ func (r *Raft) RequestVote(input RequestVoteInput) RequestVoteOutput {
 }
 
 func (r *Raft) addFollowerTimer() {
-	r.timerCounter++
-	counter := r.timerCounter
+	ss := r.getStateSnapshot()
 	r.follower.timerCancel = r.timer.AddTimer(10*time.Second, func() {
-		r.handleFollowerTimeout(counter)
+		if !ss.isValid() {
+			return
+		}
+		r.handleFollowerTimeout()
 	})
 }
 
@@ -334,9 +365,14 @@ func (r *Raft) AppendEntriesRPC(input AppendEntriesInput) AppendEntriesOutput {
 		}
 	}
 
-	r.checkRequestResponseTerm(input.Term, NullNodeID{})
-	r.follower.timerCancel()
-	r.addFollowerTimer()
+	r.checkTerm(input.Term)
+
+	if r.state == raftStateCandidate {
+		r.becomeFollower()
+	} else {
+		r.follower.timerCancel()
+		r.addFollowerTimer()
+	}
 
 	if len(input.Entries) > 0 {
 		r.storage.AppendEntries(input.Entries, true, nil)
@@ -348,7 +384,7 @@ func (r *Raft) AppendEntriesRPC(input AppendEntriesInput) AppendEntriesOutput {
 	}
 }
 
-// AppendEntriesInternal ...
+// AppendEntriesInternal from the state machine
 func (r *Raft) AppendEntriesInternal(entries []LogEntry) {
 	lastEntry := r.storage.GetLastEntry()
 

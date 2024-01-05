@@ -54,6 +54,22 @@ func newRaftTestWith3Nodes() *raftTest {
 	return r
 }
 
+func (r *raftTest) resetTimerCalls() {
+	r.timer.AddCallbacks = nil
+	r.timer.AddDurations = nil
+	r.timer.CancelCalls = 0
+	r.timer.CancelIDs = nil
+}
+
+func (r *raftTest) startAtCandidate(t *testing.T) {
+	r.raft.Start()
+
+	assert.Equal(t, 1, len(r.timer.AddCallbacks))
+	r.timer.AddCallbacks[0]()
+	assert.Equal(t, raftStateCandidate, r.raft.state)
+	r.resetTimerCalls()
+}
+
 func TestRaft_New(t *testing.T) {
 	t.Run("check new", func(t *testing.T) {
 		r := newRaftTest()
@@ -62,6 +78,8 @@ func TestRaft_New(t *testing.T) {
 }
 
 func TestRaft_Start(t *testing.T) {
+	const leaderTerm = initTerm + 1
+
 	t.Run("call timer", func(t *testing.T) {
 		r := newRaftTestWith3Nodes()
 		r.raft.Start()
@@ -321,12 +339,12 @@ func TestRaft_Start(t *testing.T) {
 		assert.Equal(t, []time.Duration{10 * time.Second}, r.timer.AddDurations)
 	})
 
-	t.Run("do not become candidate for old timer expire", func(t *testing.T) {
+	t.Run("recv append rpc when in candidate state", func(t *testing.T) {
 		r := newRaftTestWith3Nodes()
-		r.raft.Start()
+		r.startAtCandidate(t)
 
 		r.raft.AppendEntriesRPC(AppendEntriesInput{
-			Term:     initTerm + 1,
+			Term:     leaderTerm,
 			LeaderID: node2,
 
 			PrevLogIndex: 0,
@@ -335,13 +353,7 @@ func TestRaft_Start(t *testing.T) {
 			Entries: nil,
 		})
 
-		callbacks := r.timer.AddCallbacks
-		assert.Equal(t, 2, len(callbacks))
-
-		assert.Equal(t, []int{1}, r.timer.CancelIDs)
-
-		callbacks[0]()
-
+		assert.Equal(t, 0, len(r.timer.CancelIDs))
 		assert.Equal(t, raftStateFollower, r.raft.state)
 	})
 }

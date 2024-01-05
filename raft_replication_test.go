@@ -6,8 +6,74 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func (r *raftTest) startAtLeader(t *testing.T) {
+	r.startAtCandidate(t)
+
+	handlers := r.client.RequestVoteHandlers
+
+	handlers[0](RequestVoteOutput{
+		Term:        initTerm + 1,
+		VoteGranted: true,
+	}, nil)
+	handlers[1](RequestVoteOutput{
+		Term:        initTerm + 1,
+		VoteGranted: true,
+	}, nil)
+
+	assert.Equal(t, raftStateLeader, r.raft.state)
+}
+
 func TestRaft_Append_Internal(t *testing.T) {
+	const leaderTerm = initTerm + 1
 	t.Run("normal", func(t *testing.T) {
+		r := newRaftTestWith3Nodes()
+		r.startAtLeader(t)
+
+		getEntries := r.storage.GetEntriesHandlers
+		getEntries[0]()
+		getEntries[1]()
+
+		appendHandlers := r.client.AppendHandlers
+		assert.Equal(t, 2, len(appendHandlers))
+
+		appendHandlers[0](AppendEntriesOutput{
+			Term:    leaderTerm,
+			Success: true,
+		}, nil)
+
+		// Do Append Entries Internal
+		r.client.AppendInputs = nil
+		r.storage.GetEntriesHandlers = nil
+
+		r.raft.AppendEntriesInternal([]LogEntry{
+			{
+				Index: 1,
+				Term:  leaderTerm,
+				Data:  []byte("data 01"),
+			},
+		})
+
+		assert.Equal(t, 1, len(r.storage.GetEntriesHandlers))
+		r.storage.GetEntriesHandlers[0]()
+
+		inputs := r.client.AppendInputs
+		assert.Equal(t, 1, len(inputs))
+
+		assert.Equal(t, node2, inputs[0].NodeID)
+		assert.Equal(t, leaderTerm, inputs[0].Term)
+		assert.Equal(t, node1, inputs[0].LeaderID)
+		assert.Equal(t, TermNumber(0), inputs[0].PrevLogTerm)
+		assert.Equal(t, LogIndex(0), inputs[0].PrevLogIndex)
+		assert.Equal(t, []LogEntry{
+			{
+				Index: 1,
+				Term:  leaderTerm,
+				Data:  []byte("data 01"),
+			},
+		}, inputs[0].Entries)
+	})
+
+	t.Run("itself and another response for append, increase commit index", func(t *testing.T) {
 		r := newRaftTestWith3Nodes()
 		r.raft.Start()
 
@@ -21,10 +87,6 @@ func TestRaft_Append_Internal(t *testing.T) {
 			Term:        initTerm + 1,
 			VoteGranted: true,
 		}, nil)
-		handlers[1](RequestVoteOutput{
-			Term:        initTerm + 1,
-			VoteGranted: true,
-		}, nil)
 
 		assert.Equal(t, raftStateLeader, r.raft.state)
 
@@ -32,6 +94,7 @@ func TestRaft_Append_Internal(t *testing.T) {
 		getEntries[0]()
 		getEntries[1]()
 
+		// initial append response after become leader
 		appendHandlers := r.client.AppendHandlers
 		assert.Equal(t, 2, len(appendHandlers))
 
